@@ -381,12 +381,7 @@ impl<'a, 'src, C: DiagnosticCode> DiagnosticFormatter<'a, 'src, C> {
     let help = meta_label("help", color);
     for s in &self.diagnostic.suggestions {
       let header = s.message.clone().unwrap_or_else(|| "try this:".to_string());
-      out.push_str(&format!(
-        "   {} {}: {}\n",
-        eq,
-        help,
-        sanitize_for_display(&header, false),
-      ));
+      out.push_str(&format!("   {} {}: {}\n", eq, help, sanitize_for_display(&header, false),));
       self.write_suggestion_diff(out, s, color);
       Self::write_applicability(out, s, color);
     }
@@ -489,11 +484,7 @@ fn label_columns_on_line(label: &Label, line: usize, raw_line: &str) -> (usize, 
   let end_col_inclusive = if end_line_of(label) == line {
     if line == start_line {
       // single-line label: column..column+length
-      label
-        .span
-        .column
-        .saturating_add(label.span.length)
-        .max(label.span.column.saturating_add(1))
+      label.span.column.saturating_add(label.span.length).max(label.span.column.saturating_add(1))
     } else {
       // last line of multi-line label: end at remaining length on this line
       // we don't have per-line offsets, so just stop at line end
@@ -560,9 +551,9 @@ pub(crate) fn sanitize_for_display(s: &str, keep_newlines: bool) -> Cow<'_, str>
     match c {
       '\t' => out.push('\t'),
       '\n' if keep_newlines => out.push('\n'),
-      '\n' => {} // drop injected newline in single-line text
-      '\u{7f}' => {}
-      c if c.is_control() => {}
+      '\n' => {}, // drop injected newline in single-line text
+      '\u{7f}' => {},
+      c if c.is_control() => {},
       c => out.push(c),
     }
   }

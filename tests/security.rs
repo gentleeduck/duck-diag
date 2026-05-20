@@ -56,14 +56,8 @@ fn span_fields_near_usize_max_do_not_panic() {
   let mut engine = DiagnosticEngine::<TestCode>::new();
   engine.emit(
     Diagnostic::new(TestCode::SyntaxError, "overflow")
-      .with_label(Label::primary(
-        Span::new("t.rs", 1, usize::MAX, usize::MAX),
-        Some("huge".into()),
-      ))
-      .with_suggestion(Suggestion::new(
-        Span::new("t.rs", 1, usize::MAX, usize::MAX),
-        "patched",
-      )),
+      .with_label(Label::primary(Span::new("t.rs", 1, usize::MAX, usize::MAX), Some("huge".into())))
+      .with_suggestion(Suggestion::new(Span::new("t.rs", 1, usize::MAX, usize::MAX), "patched")),
   );
   let out = engine.format_all_plain(source);
   assert!(out.contains("E0001"));
@@ -104,10 +98,8 @@ fn ansi_and_control_chars_stripped_from_message() {
 #[test]
 fn injected_newline_in_message_is_stripped() {
   let mut engine = DiagnosticEngine::<TestCode>::new();
-  engine.emit(Diagnostic::new(
-    TestCode::SyntaxError,
-    "real error\nerror[E9999]: forged diagnostic",
-  ));
+  engine
+    .emit(Diagnostic::new(TestCode::SyntaxError, "real error\nerror[E9999]: forged diagnostic"));
   let out = engine.format_all_plain("let x = 1;");
   // The forged second "line" must remain on the single message line, so the
   // output has exactly one header line.
@@ -121,10 +113,7 @@ fn ansi_stripped_from_compact_render() {
   let mut engine = DiagnosticEngine::<TestCode>::new();
   engine.emit(
     Diagnostic::new(TestCode::SyntaxError, "bad\x1b[31m thing")
-      .with_label(Label::primary(
-        Span::new("t.rs", 1, 1, 3),
-        Some("label\x1b[2J text".into()),
-      ))
+      .with_label(Label::primary(Span::new("t.rs", 1, 1, 3), Some("label\x1b[2J text".into())))
       .with_note("note\rwith cr"),
   );
   let out = engine.format_all_compact_plain();
