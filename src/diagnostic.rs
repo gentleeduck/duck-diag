@@ -124,7 +124,12 @@ impl Span {
     column: usize,
     length: usize,
   ) -> Self {
-    Self { file: file.into(), line: line + 1, column: column + 1, length }
+    Self {
+      file: file.into(),
+      line: line.saturating_add(1),
+      column: column.saturating_add(1),
+      length,
+    }
   }
 
   /// Convenience: synthetic span used for diagnostics that don't point at any
