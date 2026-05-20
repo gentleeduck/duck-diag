@@ -197,6 +197,13 @@ fn from_zero_based_adds_one() {
 }
 
 #[test]
+fn from_zero_based_saturates_on_usize_max() {
+  let s = Span::from_zero_based("a.rs", usize::MAX, usize::MAX, 0);
+  assert_eq!(s.line, usize::MAX);
+  assert_eq!(s.column, usize::MAX);
+}
+
+#[test]
 fn label_with_note_attaches_inline_note() {
   let span = Span::new("a.rs", 1, 1, 3);
   let l = Label::primary(span, Some("hi".into())).with_note("see also: rule X");
