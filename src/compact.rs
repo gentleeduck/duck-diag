@@ -21,6 +21,7 @@
 use colored::*;
 
 use crate::diagnostic::{Applicability, Diagnostic, DiagnosticCode, Label, LabelStyle, Suggestion};
+use crate::formatter::sanitize_for_display;
 use crate::style::*;
 
 /// Render a single diagnostic in compact (source-less) form.
@@ -40,7 +41,7 @@ fn write_header<C: DiagnosticCode>(d: &Diagnostic<C>, out: &mut String, color: b
     "{}[{}]: {}",
     severity_word(d.severity, color),
     code_word(d.severity, d.code.code(), color),
-    d.message,
+    sanitize_for_display(&d.message, false),
   ));
   if let Some(u) = d.code.url() {
     out.push_str(&format!(" {}", paint(&format!("(see {u})"), color, |s| s.blue().italic())));
@@ -81,11 +82,14 @@ fn write_label_messages<C: DiagnosticCode>(d: &Diagnostic<C>, out: &mut String, 
         "  {} {}: {}\n",
         eq,
         paint_label(d.severity, l.style, kind, color),
-        paint_label(d.severity, l.style, msg, color),
+        paint_label(d.severity, l.style, &sanitize_for_display(msg, false), color),
       ));
     }
     if let Some(note) = &l.note {
-      out.push_str(&format!("       {}\n", paint(note, color, |s| s.cyan().italic())));
+      out.push_str(&format!(
+        "       {}\n",
+        paint(&sanitize_for_display(note, false), color, |s| s.cyan().italic()),
+      ));
     }
   }
 }
@@ -93,10 +97,20 @@ fn write_label_messages<C: DiagnosticCode>(d: &Diagnostic<C>, out: &mut String, 
 fn write_notes_help<C: DiagnosticCode>(d: &Diagnostic<C>, out: &mut String, color: bool) {
   let eq = eq_sep(color);
   for note in &d.notes {
-    out.push_str(&format!("  {} {}: {}\n", eq, meta_label("note", color), note));
+    out.push_str(&format!(
+      "  {} {}: {}\n",
+      eq,
+      meta_label("note", color),
+      sanitize_for_display(note, false),
+    ));
   }
   if let Some(help) = &d.help {
-    out.push_str(&format!("  {} {}: {}\n", eq, meta_label("help", color), help));
+    out.push_str(&format!(
+      "  {} {}: {}\n",
+      eq,
+      meta_label("help", color),
+      sanitize_for_display(help, false),
+    ));
   }
 }
 
@@ -108,9 +122,10 @@ fn write_suggestions<C: DiagnosticCode>(d: &Diagnostic<C>, out: &mut String, col
   let help = meta_label("help", color);
   for s in &d.suggestions {
     let header = s.message.clone().unwrap_or_else(|| "try this:".to_string());
-    out.push_str(&format!("  {} {}: {}\n", eq, help, header));
+    out.push_str(&format!("  {} {}: {}\n", eq, help, sanitize_for_display(&header, false)));
     for line in s.replacement.lines() {
-      out.push_str(&format!("       {}\n", paint(line, color, |s| s.green())));
+      let line = sanitize_for_display(line, false);
+      out.push_str(&format!("       {}\n", paint(&line, color, |s| s.green())));
     }
     write_applicability(out, s, color);
   }

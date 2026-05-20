@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use colored::*;
 use unicode_width::UnicodeWidthStr;
 
@@ -164,7 +166,7 @@ impl<'a, 'src, C: DiagnosticCode> DiagnosticFormatter<'a, 'src, C> {
       "{}: [{}]: {}",
       severity_word(d.severity, color),
       code_word(d.severity, d.code.code(), color),
-      d.message,
+      sanitize_for_display(&d.message, false),
     ));
     if let Some(u) = d.code.url() {
       out.push_str(&format!(" {}", paint(&format!("(see {u})"), color, |s| s.blue().italic())));
@@ -229,7 +231,7 @@ impl<'a, 'src, C: DiagnosticCode> DiagnosticFormatter<'a, 'src, C> {
     }
 
     let start = min_line.saturating_sub(self.options.context_lines).max(1);
-    let end = (max_line + self.options.context_lines).min(self.cache.len());
+    let end = max_line.saturating_add(self.options.context_lines).min(self.cache.len());
 
     let gutter_w = end.to_string().len().max(2);
     let bar_s = bar(color);
@@ -238,7 +240,10 @@ impl<'a, 'src, C: DiagnosticCode> DiagnosticFormatter<'a, 'src, C> {
 
     for line_num in start..=end {
       let raw = self.cache.line(line_num).unwrap_or("");
-      let expanded = expand_tabs(raw, self.options.tab_width);
+      // Strip control chars from the source snippet before display (source
+      // lines keep `\n`, but `lines()` never yields one anyway).
+      let safe_raw = sanitize_for_display(raw, true);
+      let expanded = expand_tabs(&safe_raw, self.options.tab_width);
       let truncated = truncate_line(&expanded, self.options.max_line_width);
       let line_label = format!("{:>w$}", line_num, w = gutter_w);
       let line_label_c = paint(&line_label, color, |s| s.blue().bold());
@@ -323,13 +328,19 @@ impl<'a, 'src, C: DiagnosticCode> DiagnosticFormatter<'a, 'src, C> {
           blank_gutter,
           bar_s,
           buf,
-          paint_label(self.diagnostic.severity, m_label.style, msg, color),
+          paint_label(
+            self.diagnostic.severity,
+            m_label.style,
+            &sanitize_for_display(msg, false),
+            color,
+          ),
         ),
         None => format!("  {} {} {}\n", blank_gutter, bar_s, buf),
       };
       out.push_str(&line);
 
       if let Some(note) = &m_label.note {
+        let note = sanitize_for_display(note, false);
         let note_c = if color { note.cyan().italic().to_string() } else { format!("note: {note}") };
         out.push_str(&format!(
           "  {} {} {}↳ {}\n",
@@ -345,10 +356,20 @@ impl<'a, 'src, C: DiagnosticCode> DiagnosticFormatter<'a, 'src, C> {
   fn write_notes_help(&self, out: &mut String, color: bool) {
     let eq = eq_sep(color);
     for note in &self.diagnostic.notes {
-      out.push_str(&format!("   {} {}: {}\n", eq, meta_label("note", color), note));
+      out.push_str(&format!(
+        "   {} {}: {}\n",
+        eq,
+        meta_label("note", color),
+        sanitize_for_display(note, false),
+      ));
     }
     if let Some(help) = &self.diagnostic.help {
-      out.push_str(&format!("   {} {}: {}\n", eq, meta_label("help", color), help));
+      out.push_str(&format!(
+        "   {} {}: {}\n",
+        eq,
+        meta_label("help", color),
+        sanitize_for_display(help, false),
+      ));
     }
   }
 
@@ -360,7 +381,12 @@ impl<'a, 'src, C: DiagnosticCode> DiagnosticFormatter<'a, 'src, C> {
     let help = meta_label("help", color);
     for s in &self.diagnostic.suggestions {
       let header = s.message.clone().unwrap_or_else(|| "try this:".to_string());
-      out.push_str(&format!("   {} {}: {}\n", eq, help, header));
+      out.push_str(&format!(
+        "   {} {}: {}\n",
+        eq,
+        help,
+        sanitize_for_display(&header, false),
+      ));
       self.write_suggestion_diff(out, s, color);
       Self::write_applicability(out, s, color);
     }
@@ -375,7 +401,8 @@ impl<'a, 'src, C: DiagnosticCode> DiagnosticFormatter<'a, 'src, C> {
       Some(l) => l,
       None => {
         for line in s.replacement.lines() {
-          out.push_str(&format!("       {}\n", paint(line, color, |s| s.green())));
+          let line = sanitize_for_display(line, false);
+          out.push_str(&format!("       {}\n", paint(&line, color, |s| s.green())));
         }
         return;
       },
@@ -386,9 +413,11 @@ impl<'a, 'src, C: DiagnosticCode> DiagnosticFormatter<'a, 'src, C> {
     let col0 = s.span.column.saturating_sub(1);
     let line_bytes = orig_line.len();
     let start = col0.min(line_bytes);
-    let end = (start + s.span.length).min(line_bytes);
-    let prefix = &orig_line[..start];
-    let suffix = &orig_line[end..];
+    let end = start.saturating_add(s.span.length).min(line_bytes);
+    // Snap to char boundaries + tolerate malformed spans so a suggestion
+    // landing mid-codepoint can't panic the host process.
+    let prefix = safe_slice(orig_line, 0, start);
+    let suffix = safe_slice(orig_line, end, line_bytes);
 
     // Build rewritten content by splicing replacement between prefix + suffix.
     // First rewritten line includes prefix + first replacement line; subsequent
@@ -401,7 +430,7 @@ impl<'a, 'src, C: DiagnosticCode> DiagnosticFormatter<'a, 'src, C> {
       new_lines.push(format!("{}{}{}", head, r, tail));
     }
 
-    let last_line = line_num + new_lines.len().saturating_sub(1);
+    let last_line = line_num.saturating_add(new_lines.len().saturating_sub(1));
     let gutter_w = last_line.to_string().len().max(2);
     let bar_s = bar(color);
     let blank_gutter = " ".repeat(gutter_w);
@@ -415,16 +444,16 @@ impl<'a, 'src, C: DiagnosticCode> DiagnosticFormatter<'a, 'src, C> {
       "  {} {} {}\n",
       paint(&lbl, color, |s| s.blue().bold()),
       minus,
-      paint(orig_line, color, |s| s.red()),
+      paint(&sanitize_for_display(orig_line, false), color, |s| s.red()),
     ));
 
     for (i, body) in new_lines.iter().enumerate() {
-      let lbl = format!("{:>w$}", line_num + i, w = gutter_w);
+      let lbl = format!("{:>w$}", line_num.saturating_add(i), w = gutter_w);
       out.push_str(&format!(
         "  {} {} {}\n",
         paint(&lbl, color, |s| s.blue().bold()),
         plus,
-        paint(body, color, |s| s.green()),
+        paint(&sanitize_for_display(body, false), color, |s| s.green()),
       ));
     }
 
@@ -454,13 +483,17 @@ fn label_touches(label: &Label, line: usize) -> bool {
 fn label_columns_on_line(label: &Label, line: usize, raw_line: &str) -> (usize, usize) {
   let start_line = label.span.line;
   let line_byte_len = raw_line.len();
-  let line_end_col = line_byte_len + 1; // 1-based inclusive end-of-line column
+  let line_end_col = line_byte_len.saturating_add(1); // 1-based inclusive end-of-line column
 
   let start_col = if line == start_line { label.span.column.max(1) } else { 1 };
   let end_col_inclusive = if end_line_of(label) == line {
     if line == start_line {
       // single-line label: column..column+length
-      (label.span.column + label.span.length).max(label.span.column + 1)
+      label
+        .span
+        .column
+        .saturating_add(label.span.length)
+        .max(label.span.column.saturating_add(1))
     } else {
       // last line of multi-line label: end at remaining length on this line
       // we don't have per-line offsets, so just stop at line end
@@ -470,7 +503,7 @@ fn label_columns_on_line(label: &Label, line: usize, raw_line: &str) -> (usize, 
     line_end_col
   };
 
-  (start_col, end_col_inclusive.min(line_end_col).max(start_col + 1))
+  (start_col, end_col_inclusive.min(line_end_col).max(start_col.saturating_add(1)))
 }
 
 fn end_line_of(label: &Label) -> usize {
@@ -479,6 +512,61 @@ fn end_line_of(label: &Label) -> usize {
   // multiple labels for precise rendering. For our purposes the label
   // ends on its start line unless the user attaches multiple labels.
   label.span.line
+}
+
+/// Snap `idx` down to the nearest valid UTF-8 char boundary of `s`.
+///
+/// Untrusted span `column`/`length` fields yield byte offsets that may land
+/// inside a multi-byte codepoint. Slicing there panics; this hand-rolled
+/// equivalent of the (unstable) `str::floor_char_boundary` avoids that.
+pub(crate) fn floor_char_boundary(s: &str, idx: usize) -> usize {
+  let mut i = idx.min(s.len());
+  while i > 0 && !s.is_char_boundary(i) {
+    i -= 1;
+  }
+  i
+}
+
+/// Take `s[start..end]`, snapping both offsets to char boundaries, clamping
+/// to `s.len()`, and tolerating a malformed span where `end < start`. Never
+/// panics — falls back to an empty slice if the (clamped) range is invalid.
+pub(crate) fn safe_slice(s: &str, start: usize, end: usize) -> &str {
+  let mut start = floor_char_boundary(s, start);
+  let mut end = floor_char_boundary(s, end);
+  if end < start {
+    std::mem::swap(&mut start, &mut end);
+  }
+  s.get(start..end).unwrap_or("")
+}
+
+/// Strip C0 control characters (`\x00..=\x1f`) and DEL (`\x7f`) from untrusted
+/// text before it is written to the formatted output, defeating ANSI escape /
+/// cursor / carriage-return spoofing of terminal output.
+///
+/// `keep_newlines` controls `\n`: source snippets are inherently multi-line so
+/// they keep it, but message/label/note strings strip it (an injected newline
+/// in a single-line message is itself spoofing). `\t` is always kept — tab
+/// expansion handles it downstream.
+pub(crate) fn sanitize_for_display(s: &str, keep_newlines: bool) -> Cow<'_, str> {
+  let needs = s.chars().any(|c| {
+    let ctrl = (c.is_control() && c != '\t' && c != '\n') || c == '\u{7f}';
+    ctrl || (c == '\n' && !keep_newlines)
+  });
+  if !needs {
+    return Cow::Borrowed(s);
+  }
+  let mut out = String::with_capacity(s.len());
+  for c in s.chars() {
+    match c {
+      '\t' => out.push('\t'),
+      '\n' if keep_newlines => out.push('\n'),
+      '\n' => {} // drop injected newline in single-line text
+      '\u{7f}' => {}
+      c if c.is_control() => {}
+      c => out.push(c),
+    }
+  }
+  Cow::Owned(out)
 }
 
 fn expand_tabs(line: &str, tab_width: usize) -> String {
